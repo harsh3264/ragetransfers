@@ -1,4 +1,5 @@
 import pandas as pd
+pd.options.mode.chained_assignment = None # default "warn"
 import numpy as np
 import json
 import requests
@@ -9,45 +10,40 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from fpl_pre_process import fpl_players_collab
 import pickle
+from fpl_pre_process import fpl_players_collab
 
-r_team_id = requests.get('https://fantasy.premierleague.com/api/entry/58575/')
-x_team_id = r_team_id.json()
+classic_league_reference = pd.read_csv('/Users/Harsh/Desktop/ragetransfers/fpl_classic_leagues.csv')
 
-all_leagues = x_team_id['leagues']
-
-classic_leagues = pd.DataFrame(all_leagues['classic'])
-
-classic_league_ids = list(classic_leagues[classic_leagues['league_type'] == 'x'].id)
-
-classic_league_ids = [667096]
+classic_league_ids = list(classic_league_reference['id'])
 
 all_leagues_data = pd.DataFrame()
 
 for i in classic_league_ids:
-    temp_league_string = 'https://fantasy.premierleague.com/api/leagues-classic/' + str(i) + '/standings/'
-    r_league = requests.get(temp_league_string)
-    x_league = r_league.json()
-    league_data = pd.DataFrame(x_league['standings']['results'])
-    all_leagues_data = pd.concat([all_leagues_data,league_data], axis=0)
-
+    for j in range(1,7):
+        temp_league_string = 'https://fantasy.premierleague.com/api/leagues-classic/' + str(i) + '/standings/?page_standings=' + str(j)
+        r_league = requests.get(temp_league_string)
+        x_league = r_league.json()
+        league_data = pd.DataFrame(x_league['standings']['results'])
+        league_data['league_id'] = i
+        all_leagues_data = pd.concat([all_leagues_data,league_data], axis=0).reset_index(drop=True)
 
 fpl_league_report = all_leagues_data.rename({'entry': 'manager_id',
                                              'player_name': 'manager_name',
                                              'entry_name': 'team_name',
                                              'total': 'points'}, axis=1)
 
-fpl_league_report = fpl_league_report[['manager_id', 'manager_name', 'team_name', 'points']]
+fpl_league_report = fpl_league_report[['league_id', 'manager_id', 'manager_name', 'team_name', 'points']]
 
+fpl_league_report['manager_id'] = fpl_league_report['manager_id'].astype(int)
 
 # all_leagues_data = all_leagues_data['entry']
 
 max_gw = np.max(fpl_players_collab['round'])
 
-ids = list(all_leagues_data['entry'].unique())
+ids = list(fpl_league_report['manager_id'].unique())
 
-start_event = x_team_id['started_event']
+start_event = 1
 
 fpl_players_all_managers_gws_data = pd.DataFrame()
 
@@ -108,6 +104,8 @@ for i in ids:
     temp_manager_current_season_data['manager_id'] = i
     all_managers_current_season_data = pd.concat([all_managers_current_season_data, temp_manager_current_season_data], axis=0)
 
+all_managers_chips_data['event'] = all_managers_chips_data['event'].astype(int)
+
 # Mapping Transfers
 
 manager_transfers_string = 'https://fantasy.premierleague.com/api/entry/6484780/transfers/'
@@ -126,6 +124,15 @@ for i in ids:
     temp_manager_transfers_data['manager_id'] = i
     all_managers_transfers_data = pd.concat([all_managers_transfers_data, temp_manager_transfers_data], axis=0)
 
+all_managers_transfers_data['element_in'] = all_managers_transfers_data['element_in'].astype(int)
+
+all_managers_transfers_data['element_out'] = all_managers_transfers_data['element_out'].astype(int)
+
+all_managers_transfers_data['event'] = all_managers_transfers_data['event'].astype(int)
+
+all_managers_transfers_data['element_in_cost'] = all_managers_transfers_data['element_in_cost']/10
+
+all_managers_transfers_data['element_out_cost'] = all_managers_transfers_data['element_out_cost']/10
 
 
 # FPL managers GW performances
@@ -144,7 +151,7 @@ fpl_managers_gw_performances['added_cap_points'] = fpl_managers_gw_performances[
 
 
 fpl_managers_gw_performances = fpl_managers_gw_performances[[
-    'player_id', 'manager_id', 'gw', 'pick_order',
+    'league_id', 'player_id', 'manager_id', 'gw', 'pick_order',
     'captain_points', 'player_name', 'position', 'team_name',
     'round_points', 'added_cap_points', 'goals_scored', 'assists',
     'clean_sheets', 'own_goals', 'penalties_saved', 'penalties_missed',
@@ -203,7 +210,6 @@ fpl_managers_gw_performances_bb['GW_captain_points'] = fpl_managers_gw_performan
 
 fpl_managers_gw_performances_bb['GW_clean_sheets'] = fpl_managers_gw_performances_bb.apply (lambda row: label_cs(row), axis=1)
 
-
 temp_df_1 = fpl_managers_gw_performances_bb[fpl_managers_gw_performances_bb['chips'] != 'bboost'].reset_index(drop=True)
 
 sub_temp_df = temp_df_1[temp_df_1['pick_order'] <= 11].reset_index(drop=True)
@@ -212,7 +218,7 @@ temp_df_2 = fpl_managers_gw_performances_bb[fpl_managers_gw_performances_bb['chi
 
 main_temp_df = pd.concat([sub_temp_df, temp_df_2], axis=0).reset_index(drop=True)
 
-grp_list = ['manager_id','manager_team_name','manager_name','gw']
+grp_list = ['league_id', 'manager_id','manager_team_name','manager_name','gw']
 
 agg_list = ['added_cap_points', 'GW_captain_points', 'goals_scored', 'assists',
             'GW_clean_sheets', 'bonus', 'saves', 'yellow_cards', 'red_cards',
@@ -223,13 +229,13 @@ master_gw_file = main_temp_df.groupby(grp_list, as_index=False)[agg_list].sum()
 
 gw_cap_name = fpl_managers_gw_performances[fpl_managers_gw_performances.captain_points >= 2].reset_index(drop=True)
 
-gw_cap_name = gw_cap_name[['manager_id', 'gw', 'player_name']]
+gw_cap_name = gw_cap_name[['league_id', 'manager_id', 'gw', 'player_name']]
 
 all_managers_current_season_data['bank_value'] = all_managers_current_season_data['bank']/10
 
 all_managers_current_season_data['team_value'] = all_managers_current_season_data['value']/10
 
-fpl_gw_level_analysis_p1 = master_gw_file.merge(gw_cap_name.rename({'player_name':'captain_name'}, axis=1), on=['manager_id', 'gw'], how='left')
+fpl_gw_level_analysis_p1 = master_gw_file.merge(gw_cap_name.rename({'player_name':'captain_name'}, axis=1), on=['league_id', 'manager_id', 'gw'], how='left')
 
 fpl_gw_level_analysis_p2 = fpl_gw_level_analysis_p1.merge(all_managers_chips_data.rename({'event':'gw', 'name':'chips'}, axis=1), on=['manager_id', 'gw'], how='left')
 
@@ -243,11 +249,15 @@ final_cols = fpl_gw_level_analysis_p1.columns.to_list() + \
 
 fpl_gw_level_analysis = fpl_gw_level_analysis_p3[final_cols]
 
+fpl_gw_level_analysis = fpl_gw_level_analysis.rename({'league_id_x':'league_id'}, axis = 1)
+
 fpl_gw_level_analysis['formation'] = fpl_gw_level_analysis['def'].astype(str) + '-' + fpl_gw_level_analysis['mid'].astype(str) + '-' + fpl_gw_level_analysis['fwd'].astype(str)
 
 fpl_gw_level_analysis = fpl_gw_level_analysis.rename({'added_cap_points':'points', 'GW_clean_sheets':'clean_sheets', 'GW_captain_points': 'Captain_Points'}, axis=1)
 
 fpl_gw_level_analysis = fpl_gw_level_analysis.fillna(0)
+
+fpl_gw_level_analysis.to_csv('fpl_gw_level_analysis.csv', header=True, index=False)
 
 
 def label_wildcard (row):
@@ -278,7 +288,7 @@ all_managers_chips_data['bboost'] = all_managers_chips_data.apply (lambda row: l
 
 all_managers_chips_data['freehit'] = all_managers_chips_data.apply (lambda row: label_freehit(row), axis=1)
 
-total_grp = ['manager_id', 'manager_team_name', 'manager_name']
+total_grp = ['league_id', 'manager_id', 'manager_team_name', 'manager_name']
 
 total_agg = ['points', 'Captain_Points', 'goals_scored', 'assists', 'clean_sheets',
              'bonus', 'saves', 'yellow_cards', 'red_cards', 'penalties_saved', 'penalties_missed',
@@ -300,16 +310,33 @@ fpl_total_analysis_p3 = fpl_total_analysis_p3.fillna(0)
 
 fpl_total_analysis_p3['Total_Points'] = fpl_total_analysis_p3['points'] + fpl_total_analysis_p3['gw_hits']
 
-fpl_total_analysis = fpl_total_analysis_p3.sort_values(['Total_Points', 'gw_hits', 'overall_rank'], ascending=[False, False, True])
+fpl_total_analysis = fpl_total_analysis_p3.sort_values(['league_id', 'Total_Points', 'gw_hits', 'overall_rank'], ascending=[False, False, False, True])
 
-fpl_total_analysis = fpl_total_analysis.rename({'gw_hits':'total_hits', 'gw_transfers':'total_transfers', 'points':'Points_without_hits'}, axis=1)
+fpl_total_analysis = fpl_total_analysis.rename({'gw_hits':'total_hits', 'gw_transfers':'total_transfers', 'points':'Points_without_hits'}, axis=1).reset_index(drop=True)
+
+
+# All Transfers Activity
+
+fpl_managers_transfers_activity_p1 = all_managers_transfers_data.merge(fpl_players_collab[['player_name', 'player_id', 'position', 'team_name', 'round', 'round_points']], left_on=['element_in', 'event'], right_on=['player_id', 'round'], how='left')
+
+fpl_managers_transfers_activity_p1 = fpl_managers_transfers_activity_p1[['manager_id', 'event', 'position', 'element_in', 'element_out', 'element_in_cost', 'element_out_cost', 'player_name', 'team_name', 'round_points']]
+
+fpl_managers_transfers_activity_p1 = fpl_managers_transfers_activity_p1.rename({'player_name':'player_in_name', 'team_name':'player_in_team', 'round_points':'player_in_points'}, axis=1)
+
+fpl_managers_transfers_activity_p2 = fpl_managers_transfers_activity_p1.merge(fpl_players_collab[['player_name', 'player_id', 'team_name', 'round', 'round_points']], left_on=['element_out', 'event'], right_on=['player_id', 'round'], how='left')
+
+transfer_cols = list(fpl_managers_transfers_activity_p1.columns) + ['player_name', 'team_name', 'round_points']
+
+fpl_managers_transfers_activity_p2 = fpl_managers_transfers_activity_p2[transfer_cols]
+
+fpl_managers_transfers_activity_p2 = fpl_managers_transfers_activity_p2.rename({'player_name':'player_out_name', 'team_name':'player_out_team', 'round_points':'player_out_points'}, axis=1)
+
+fpl_managers_transfers_activity = fpl_league_report[['league_id', 'manager_id', 'manager_name']].merge(fpl_managers_transfers_activity_p2, on=['manager_id'], how='inner')
+
+fpl_managers_transfers_activity = fpl_managers_transfers_activity.sort_values(['league_id', 'event', 'manager_id'], ascending=[True, True, True])
 
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-
-# here enter the id of your google sheet
-WIZARDS_FPL = '1rfof1k-B_MJ2onYCHFdyYo0PxTUyGvWADtlsa7lQJwA'
-RAW_DATA = 'RAW_DATA!A1'
 
 def main():
     global values_input, service
@@ -329,18 +356,9 @@ def main():
 
     service = build('sheets', 'v4', credentials=creds)
 
-    # Call the Sheets API
-    sheet = service.spreadsheets()
-    result_input = sheet.values().get(spreadsheetId=WIZARDS_FPL,
-                                range=RAW_DATA).execute()
-    values_input = result_input.get('values', [])
-
-    if not values_input and not values_expansion:
-        print('No data found.')
-
 main()
 
-def Export_DATA(sheet, range, df):
+def EXPORT_DATA(sheet, range, df, league_name):
     response_date = service.spreadsheets().values().update(
         spreadsheetId=sheet,
         valueInputOption='RAW',
@@ -349,31 +367,35 @@ def Export_DATA(sheet, range, df):
             majorDimension='ROWS',
             values=df.T.reset_index().T.values.tolist())
     ).execute()
-    print('Data successfully Updated in ' + str(range))
-
-Export_DATA(WIZARDS_FPL, RAW_DATA, fpl_managers_gw_performances_bb)
-
-j = 1
-
-for i in range(1, max_gw+1):
-    temp_gw_a = fpl_gw_level_analysis[fpl_gw_level_analysis['gw'] == i].reset_index(drop=True)
-    temp_gw_a = temp_gw_a.sort_values(['points', 'gw_hits', 'overall_rank'], ascending=[False, False, True])
-    GW_LEVEL_DATA = 'GW_Level_P!A' + str(j)
-    Export_DATA(WIZARDS_FPL, GW_LEVEL_DATA, temp_gw_a)
-    j = j + (len(temp_gw_a)) + 3
+    print('Data successfully Updated in ' + str(range) + ' for ' + str(league_name))
 
 
-OVERALL_DATA = 'OVERALL_P!A1'
+for i in classic_league_ids:
+    data_tab_1 = fpl_managers_gw_performances_bb[fpl_managers_gw_performances_bb['league_id'] == i]
+    sheet_list = list(classic_league_reference[classic_league_reference['id'] == i].gsheet)
+    sheet_id = sheet_list[0]
+    sheet_name_list = list(classic_league_reference[classic_league_reference['id'] == i].name)
+    sheet_name = sheet_name_list[0]
+    # sheet_id = '1lnRC7Id9hoj69o8vTt7WwELlAnsPQx_DqG-voKc1Hbo'
+    raw_data = 'RAW_DATA!A1'
+    EXPORT_DATA(sheet_id, raw_data, data_tab_1, sheet_name)
+    data_tab_2 = fpl_total_analysis[fpl_total_analysis['league_id'] == i]
+    overall_data = 'OVERALL_P!A1'
+    EXPORT_DATA(sheet_id, overall_data, data_tab_2, sheet_name)
+    data_tab_4 = fpl_managers_transfers_activity[fpl_managers_transfers_activity['league_id'] == i]
+    data_tab_4 = data_tab_4.fillna(0)
+    transfers_data = 'TRANSFERS_DATA!A1'
+    EXPORT_DATA(sheet_id, transfers_data, data_tab_4, sheet_name)
+    data_tab_3 = fpl_gw_level_analysis[fpl_gw_level_analysis['league_id'] == i]
+    j = 1
+    for k in range(1, max_gw + 1):
+        temp_gw_a = data_tab_3[data_tab_3['gw'] == k].reset_index(drop=True)
+        temp_gw_a = temp_gw_a.sort_values(['points', 'gw_hits', 'overall_rank'], ascending=[False, False, True])
+        gw_level_data = 'GW_Level_P!A' + str(j)
+        EXPORT_DATA(sheet_id, gw_level_data, temp_gw_a, sheet_name)
+        j = j + (len(temp_gw_a)) + 3
 
-Export_DATA(WIZARDS_FPL, OVERALL_DATA, fpl_total_analysis)
 
-
-
-
-
-
-
-# df= pd.DataFrame(values_input[1:], columns=values_input[0])
 
 
 
